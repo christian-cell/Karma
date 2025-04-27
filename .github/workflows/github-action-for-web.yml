@@ -1,0 +1,55 @@
+name: 'Github Action to deploy web in k8s'
+
+#on:
+#  push:
+#    branches: [ "master" ]
+#  pull_request:
+#    branches: [ "master" ]
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: './Karma.Web'
+
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - name: '🐋 Build Docker image'
+      run: docker build -f Dockerfile -t karma-web:${{ github.sha }} .
+
+    - uses: azure/login@v1
+      name: '🔓 az login'
+      with:
+        creds: '{"clientId":"${{ vars.SERVICE_PRINCIPAL_CLIENT_ID }}","clientSecret":"${{ secrets.SERVICE_PRINCIPAL_CLIENT_SECRET }}","subscriptionId":"${{ vars.SUBSCRIPTION_ID }}","tenantId":"${{ vars.TENANT_ID }}"}'
+
+    - name: '🔓 Login to Azure Container Registry'
+      run: |
+        docker login karma.azurecr.io -u karma -p ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+
+    - name: '🔰 Tag Docker image'
+      run: |
+        # docker tag karma-web:${{ github.sha }} karma.azurecr.io/karma-web:${{ github.sha }}
+        docker tag karma-web:${{ github.sha }} karma.azurecr.io/karma-web:${{ github.sha }}
+
+    - name: '⬆️ Upload Docker image'
+      run: |
+        docker push karma.azurecr.io/karma-web:${{ github.sha }}
+
+    - name: '🔑 Authenticate with AKS'
+      run: |
+        az account set --subscription ${{ vars.SUBSCRIPTION_ID }}
+        az aks get-credentials --resource-group karma-dev --name karma --overwrite-existing
+
+    - name: '🚀 Update Kubernetes Deployment'
+      run: |
+        kubectl set image deployment/karma-dev-web karma-web=karma.azurecr.io/karma-web:${{ github.sha }} -n karma-dev
+        kubectl rollout status deployment/karma-dev-web -n karma-dev
